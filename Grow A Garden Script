@@ -1,3 +1,25 @@
+--[[
+    Roblox Auto Plant Harvester and Seller Script for "Grow A Garden"
+
+    This script automates the process of harvesting plants and selling them
+    in the Roblox game "Grow A Garden". It is designed to be run with a
+    Roblox exploit/executor.
+
+    IMPORTANT: You MAY need to further customize the CONFIG section below to
+    match the specific names of sell areas or RemoteEvents in the game,
+    as these can change or vary.
+
+    How to find exact names/RemoteEvents:
+    1. Use your exploit's "Explorer" feature to look for parts/models
+       representing plants and sell areas. Note their exact names.
+    2. Use your exploit's "Network" tab or "Decompiler" to find RemoteEvents
+       that are fired when you manually harvest a plant or sell items.
+
+    Disclaimer: Use this script at your own risk. Automated actions may violate
+    a game's terms of service and could lead to a ban.
+]]
+
+-- Configuration Section - Customize these values for your specific game!
 local CONFIG = {
     -- Names of parts/models that represent plants in the workspace
     -- This list includes many common plants from "Grow A Garden".
@@ -21,8 +43,10 @@ local CONFIG = {
         "Lavender", "Foxglove", "Manuka Flower", "Bee Balm", "Dandelion",
         "Crocus", "Succulent", "Violet Corn"
     },
+    -- Names of parts/models that represent sell areas/NPCs in the workspace.
+    -- You WILL likely need to find the exact name in-game (e.g., "ShopNPC", "FruitSeller", "SellStation").
     SellAreaNames = {
-        "SellArea", "Sell", "SellStuff", "SellingPoint", "NPC", "Trader", "Market"
+        "SellArea", "Shop", "Vendor", "SellingPoint", "NPC", "Trader", "Market"
     },
     -- Maximum distance to search for plants/sell areas
     MaxSearchDistance = 100, -- Studs
@@ -57,6 +81,7 @@ local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService") -- Added for custom dragging
 
 -- Player and Character
 local LocalPlayer = Players.LocalPlayer
@@ -67,6 +92,11 @@ local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
 -- State variables
 local isRunning = false
 local harvestedPlantsCount = 0
+
+-- UI Dragging Variables
+local dragging = false
+local dragStart = Vector2.new(0, 0)
+local initialPosition = UDim2.new(0, 0, 0, 0)
 
 -- Utility Functions
 
@@ -159,22 +189,10 @@ local function interactWithPlant(plant)
         else
             warn("Harvest RemoteEvent not found:", CONFIG.HarvestRemoteEventName)
             debugPrint("Attempting generic interaction (touch/click).")
-            -- Fallback to generic interaction if RemoteEvent not found
-            -- Simulate touch:
-            -- You might need to directly touch the part if the game uses touch events
-            -- Example: firetouchinterest(HumanoidRootPart, plant, 0)
-            -- task.wait(0.1)
-            -- firetouchinterest(HumanoidRootPart, plant, 1)
         end
     else
         -- Option 2: Simulate touch/click (older/simpler games or if RemoteEvent is unknown)
-        -- For many games, simply being near and "touching" the plant model/part is enough.
-        -- If the game uses ClickDetectors, you might need to find a way to activate it.
-        -- Direct ClickDetector:FireServer() is usually not client-accessible.
         debugPrint("Simulating proximity/touch interaction with", plant.Name)
-        -- A common exploit method for interaction is to call a function that the client
-        -- would normally call when interacting. Without specific game knowledge,
-        -- simply moving to it and waiting is the most generic approach.
     end
     harvestedPlantsCount = harvestedPlantsCount + 1
     debugPrint("Harvested plants count:", harvestedPlantsCount)
@@ -201,7 +219,6 @@ local function interactWithSellArea(sellArea)
         else
             warn("Sell RemoteEvent not found:", CONFIG.SellRemoteEventName)
             debugPrint("Attempting generic interaction (touch/proximity).")
-            -- Fallback to generic interaction
         end
     else
         -- Option 2: Simulate touch/proximity
@@ -273,7 +290,7 @@ local function createControlUI()
     MainFrame.BorderSizePixel = 0
     MainFrame.Position = UDim2.new(0.05, 0, 0.05, 0) -- Top-left corner
     MainFrame.Size = UDim2.new(0, 200, 0, 100)
-    MainFrame.Draggable = true -- Make it draggable
+    -- MainFrame.Draggable = true -- Removed as we are implementing custom dragging
 
     local Title = Instance.new("TextLabel")
     Title.Name = "Title"
@@ -313,7 +330,31 @@ local function createControlUI()
     StartButton.MouseButton1Click:Connect(startAutomation)
     StopButton.MouseButton1Click:Connect(stopAutomation)
 
-    debugPrint("Control UI created.")
+    -- Custom Dragging Logic
+    MainFrame.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStart = input.Position
+            initialPosition = MainFrame.Position
+        end
+    end)
+
+    MainFrame.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = false
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input, gameProcessedEvent)
+        if input.UserInputType == Enum.UserInputType.MouseMovement and dragging and not gameProcessedEvent then
+            local delta = input.Position - dragStart
+            local newX = initialPosition.X.Offset + delta.X
+            local newY = initialPosition.Y.Offset + delta.Y
+            MainFrame.Position = UDim2.new(initialPosition.X.Scale, newX, initialPosition.Y.Scale, newY)
+        end
+    end)
+
+    debugPrint("Control UI created with custom dragging.")
 end
 
 -- Initialize the script
