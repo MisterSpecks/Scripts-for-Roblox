@@ -1,12 +1,19 @@
 --[[
-    Roblox Auto Plant Harvester and Seller Script
+    Roblox Auto Plant Harvester and Seller Script for "Grow A Garden"
 
     This script automates the process of harvesting plants and selling them
-    in a Roblox game. It is designed to be run with a Roblox exploit/executor.
+    in the Roblox game "Grow A Garden". It is designed to be run with a
+    Roblox exploit/executor.
 
-    IMPORTANT: You MUST customize the CONFIG section below to match the
-    specific game you are playing. This includes plant names, sell area names,
-    and how interaction (harvesting/selling) works.
+    IMPORTANT: You MAY need to further customize the CONFIG section below to
+    match the specific names of sell areas or RemoteEvents in the game,
+    as these can change or vary.
+
+    How to find exact names/RemoteEvents:
+    1. Use your exploit's "Explorer" feature to look for parts/models
+       representing plants and sell areas. Note their exact names.
+    2. Use your exploit's "Network" tab or "Decompiler" to find RemoteEvents
+       that are fired when you manually harvest a plant or sell items.
 
     Disclaimer: Use this script at your own risk. Automated actions may violate
     a game's terms of service and could lead to a ban.
@@ -15,18 +22,31 @@
 -- Configuration Section - Customize these values for your specific game!
 local CONFIG = {
     -- Names of parts/models that represent plants in the workspace
+    -- This list includes many common plants from "Grow A Garden".
     PlantNames = {
-        "Plant",
-        "Bush",
-        "Crop",
-        "FarmItem"
+        "Tomato", "Corn", "Strawberry", "Blueberry", "Carrot", "Pumpkin",
+        "Watermelon", "Apple", "Bamboo", "Coconut", "Cactus", "Dragon Fruit",
+        "Mango", "Grape", "Mushroom", "Pepper", "Cacao", "Beanstalk", "Peach",
+        "Moonglow", "Blood Banana", "Moon Melon", "Celestiberry", "Moonflower",
+        "Starfruit", "Mint", "Nightshade", "Glowshroom", "Moon Mango",
+        "Moon Blossom", "Candy Blossom", "Sugar Apple", "Dragon Pepper",
+        "Elephant Ears", "Hive Fruit", "Lily of the Valley", "Lilac",
+        "Rosy Delight", "Nectarine", "Guanabana", "Parasol Flower",
+        "Nectar Thorn", "Sunflower", "Bendboo", "Cocovine", "Honeysuckle",
+        "Venus Fly Trap", "Lumira", "Purple Dahlia", "Ember Lily", "Pink Lily",
+        "Suncoil", "Aloe Vera", "Bell Pepper", "Kiwi", "Pineapple", "Banana",
+        "Avocado", "Green Apple", "Cauliflower", "Feijoa", "Loquat",
+        "Prickly Pear", "Cantaloupe", "Wild Carrot", "Pitcher Plant",
+        "Traveler's Fruit", "Rafflesia", "Peace Lily", "Delphinium",
+        "Chocolate Carrot", "Red Lollipop", "Easter Egg", "Durian",
+        "Cranberry", "Eggplant", "Lotus", "Soul Fruit", "Cursed Fruit",
+        "Lavender", "Foxglove", "Manuka Flower", "Bee Balm", "Dandelion",
+        "Crocus", "Succulent", "Violet Corn"
     },
-    -- Names of parts/models that represent sell areas/NPCs in the workspace
+    -- Names of parts/models that represent sell areas/NPCs in the workspace.
+    -- You WILL likely need to find the exact name in-game (e.g., "ShopNPC", "FruitSeller", "SellStation").
     SellAreaNames = {
-        "SellArea",
-        "Shop",
-        "Vendor",
-        "SellingPoint"
+        "SellArea", "Shop", "Vendor", "SellingPoint", "NPC", "Trader", "Market"
     },
     -- Maximum distance to search for plants/sell areas
     MaxSearchDistance = 100, -- Studs
@@ -91,26 +111,30 @@ local function findNearestTarget(targetNames, maxDistance)
         return nil
     end
 
-    for _, targetName in ipairs(targetNames) do
-        for _, obj in ipairs(Workspace:GetDescendants()) do
-            if obj:IsA("BasePart") or obj:IsA("Model") then
-                -- Check if the object's name matches any of the target names
-                local isTarget = false
-                for _, name in ipairs(targetNames) do
-                    if obj.Name:lower():find(name:lower()) then
-                        isTarget = true
-                        break
-                    end
+    local playerPosition = HumanoidRootPart.Position
+
+    -- Iterate through all descendants in Workspace
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("BasePart") or obj:IsA("Model") or obj:IsA("MeshPart") or obj:IsA("Part") then
+            local isTarget = false
+            for _, name in ipairs(targetNames) do
+                if obj.Name:lower():find(name:lower()) then
+                    isTarget = true
+                    break
+                end
+            end
+
+            if isTarget and obj.Parent ~= LocalPlayer and obj.Parent ~= Character then -- Avoid targeting self
+                local targetPosition = obj.Position
+                if obj:IsA("Model") and obj.PrimaryPart then
+                    targetPosition = obj.PrimaryPart.Position
                 end
 
-                if isTarget then
-                    local targetPosition = obj.Position or (obj:IsA("Model") and obj.PrimaryPart and obj.PrimaryPart.Position)
-                    if targetPosition then
-                        local distance = (HumanoidRootPart.Position - targetPosition).Magnitude
-                        if distance < minDistance then
-                            minDistance = distance
-                            nearestTarget = obj
-                        end
+                if targetPosition then
+                    local distance = (playerPosition - targetPosition).Magnitude
+                    if distance < minDistance then
+                        minDistance = distance
+                        nearestTarget = obj
                     end
                 end
             end
@@ -124,36 +148,57 @@ local function moveTo(position)
     if CONFIG.AutoMove and Humanoid and HumanoidRootPart then
         debugPrint("Moving to:", position)
         Humanoid:MoveTo(position)
-        Humanoid.MoveToFinished:Wait()
-        debugPrint("Reached destination.")
+        -- Wait for the character to reach the destination or timeout
+        local timeout = 5 -- seconds
+        local start = tick()
+        repeat
+            task.wait(0.1)
+            if (HumanoidRootPart.Position - position).Magnitude < 5 then -- Close enough
+                break
+            end
+        until tick() - start > timeout or not isRunning -- Stop if script is stopped
+        Humanoid:MoveTo(HumanoidRootPart.Position) -- Stop current movement
+        debugPrint("Reached destination or timed out.")
     end
 end
 
 -- Function to interact with a plant (harvest)
 local function interactWithPlant(plant)
-    if not plant or not HumanoidRootPart then return end
+    if not plant or not HumanoidRootPart or not isRunning then return end
 
     debugPrint("Attempting to harvest:", plant.Name)
+
+    -- Move close to the plant if AutoMove is enabled
+    if CONFIG.AutoMove then
+        moveTo(plant.Position)
+    end
 
     -- Option 1: Fire a RemoteEvent (most common for modern games)
     if CONFIG.HarvestRemoteEventName then
         local remote = ReplicatedStorage:FindFirstChild(CONFIG.HarvestRemoteEventName)
         if remote and remote:IsA("RemoteEvent") then
             debugPrint("Firing Harvest RemoteEvent:", CONFIG.HarvestRemoteEventName, "for", plant.Name)
-            remote:FireServer(plant) -- Pass the plant object if required by the game
+            -- Games might expect the plant instance, its name, or a specific argument
+            remote:FireServer(plant)
         else
             warn("Harvest RemoteEvent not found:", CONFIG.HarvestRemoteEventName)
+            debugPrint("Attempting generic interaction (touch/click).")
+            -- Fallback to generic interaction if RemoteEvent not found
+            -- Simulate touch:
+            -- You might need to directly touch the part if the game uses touch events
+            -- Example: firetouchinterest(HumanoidRootPart, plant, 0)
+            -- task.wait(0.1)
+            -- firetouchinterest(HumanoidRootPart, plant, 1)
         end
     else
-        -- Option 2: Simulate touch/click (older/simpler games)
-        -- Move close to the plant
-        if CONFIG.AutoMove then
-            moveTo(plant.Position)
-        end
-        -- You might need to simulate a click if the game uses ClickDetectors
-        -- For example: plant.ClickDetector:FireServer() -- (This is often not directly accessible client-side)
-        -- Or just touching it is enough for some games.
-        debugPrint("Simulating touch/proximity interaction with", plant.Name)
+        -- Option 2: Simulate touch/click (older/simpler games or if RemoteEvent is unknown)
+        -- For many games, simply being near and "touching" the plant model/part is enough.
+        -- If the game uses ClickDetectors, you might need to find a way to activate it.
+        -- Direct ClickDetector:FireServer() is usually not client-accessible.
+        debugPrint("Simulating proximity/touch interaction with", plant.Name)
+        -- A common exploit method for interaction is to call a function that the client
+        -- would normally call when interacting. Without specific game knowledge,
+        -- simply moving to it and waiting is the most generic approach.
     end
     harvestedPlantsCount = harvestedPlantsCount + 1
     debugPrint("Harvested plants count:", harvestedPlantsCount)
@@ -162,25 +207,29 @@ end
 
 -- Function to interact with a sell area (sell items)
 local function interactWithSellArea(sellArea)
-    if not sellArea or not HumanoidRootPart then return end
+    if not sellArea or not HumanoidRootPart or not isRunning then return end
 
     debugPrint("Attempting to sell at:", sellArea.Name)
+
+    -- Move close to the sell area if AutoMove is enabled
+    if CONFIG.AutoMove then
+        moveTo(sellArea.Position)
+    end
 
     -- Option 1: Fire a RemoteEvent
     if CONFIG.SellRemoteEventName then
         local remote = ReplicatedStorage:FindFirstChild(CONFIG.SellRemoteEventName)
         if remote and remote:IsA("RemoteEvent") then
             debugPrint("Firing Sell RemoteEvent:", CONFIG.SellRemoteEventName, "at", sellArea.Name)
-            remote:FireServer() -- Or pass items if required by the game (e.g., remote:FireServer(inventoryItems))
+            remote:FireServer() -- Or pass items/inventory if required by the game
         else
             warn("Sell RemoteEvent not found:", CONFIG.SellRemoteEventName)
+            debugPrint("Attempting generic interaction (touch/proximity).")
+            -- Fallback to generic interaction
         end
     else
         -- Option 2: Simulate touch/proximity
-        if CONFIG.AutoMove then
-            moveTo(sellArea.Position)
-        end
-        debugPrint("Simulating touch/proximity interaction with", sellArea.Name)
+        debugPrint("Simulating proximity/touch interaction with", sellArea.Name)
     end
     harvestedPlantsCount = 0 -- Reset count after selling
     debugPrint("Items sold. Resetting harvested count.")
@@ -195,6 +244,11 @@ local function startAutomation()
     end
     isRunning = true
     debugPrint("Starting auto-harvest and auto-sell.")
+
+    -- Ensure character is ready before starting loop
+    Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    Humanoid = Character:WaitForChild("Humanoid")
+    HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
 
     while isRunning do
         -- Check if we need to sell
@@ -229,7 +283,7 @@ local function stopAutomation()
     debugPrint("Stopping auto-harvest and auto-sell.")
 end
 
--- UI for controlling the script (Optional, but good for user control)
+-- UI for controlling the script
 local function createControlUI()
     local ScreenGui = Instance.new("ScreenGui")
     ScreenGui.Name = "AutoFarmControlUI"
@@ -252,7 +306,7 @@ local function createControlUI()
     Title.BorderSizePixel = 0
     Title.Size = UDim2.new(1, 0, 0, 30)
     Title.Font = Enum.Font.GothamSemibold
-    Title.Text = "Auto Farm Control"
+    Title.Text = "Grow A Garden Auto Farm"
     Title.TextColor3 = Color3.fromRGB(255, 255, 255)
     Title.TextSize = 16.000
 
@@ -287,5 +341,4 @@ local function createControlUI()
 end
 
 -- Initialize the script
-createControlUI() -- Create the UI to start/stop the script manually
--- startAutomation() -- Uncomment this line if you want it to start immediately without clicking the UI button
+createControlUI()
