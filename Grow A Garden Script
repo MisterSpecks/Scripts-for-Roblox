@@ -1,0 +1,291 @@
+--[[
+    Roblox Auto Plant Harvester and Seller Script
+
+    This script automates the process of harvesting plants and selling them
+    in a Roblox game. It is designed to be run with a Roblox exploit/executor.
+
+    IMPORTANT: You MUST customize the CONFIG section below to match the
+    specific game you are playing. This includes plant names, sell area names,
+    and how interaction (harvesting/selling) works.
+
+    Disclaimer: Use this script at your own risk. Automated actions may violate
+    a game's terms of service and could lead to a ban.
+]]
+
+-- Configuration Section - Customize these values for your specific game!
+local CONFIG = {
+    -- Names of parts/models that represent plants in the workspace
+    PlantNames = {
+        "Plant",
+        "Bush",
+        "Crop",
+        "FarmItem"
+    },
+    -- Names of parts/models that represent sell areas/NPCs in the workspace
+    SellAreaNames = {
+        "SellArea",
+        "Shop",
+        "Vendor",
+        "SellingPoint"
+    },
+    -- Maximum distance to search for plants/sell areas
+    MaxSearchDistance = 100, -- Studs
+
+    -- Delay between harvesting actions (to avoid anti-cheat)
+    HarvestDelay = 0.5, -- seconds
+
+    -- Delay after selling before looking for more plants
+    SellDelay = 1.0, -- seconds
+
+    -- Minimum number of plants to harvest before attempting to sell
+    -- Set to 1 if you want to sell after every plant.
+    MinPlantsToSell = 5,
+
+    -- Enable/Disable automatic character movement to plants/sell areas
+    AutoMove = true,
+
+    -- Enable/Disable printing debug messages to the console
+    DebugMode = true,
+
+    -- If the game uses specific RemoteEvents for harvesting/selling, define them here.
+    -- You will need to find the actual names of these RemoteEvents using a decompiler
+    -- or network sniffer in your executor.
+    -- Example: game.ReplicatedStorage.RemoteEventForHarvest:FireServer(plant)
+    -- If the game uses touch/click, leave these as nil or empty.
+    HarvestRemoteEventName = nil, -- e.g., "HarvestPlantEvent"
+    SellRemoteEventName = nil,    -- e.g., "SellItemsEvent"
+}
+
+-- Services
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+-- Player and Character
+local LocalPlayer = Players.LocalPlayer
+local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local Humanoid = Character:WaitForChild("Humanoid")
+local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
+
+-- State variables
+local isRunning = false
+local harvestedPlantsCount = 0
+
+-- Utility Functions
+
+-- Function to print debug messages
+local function debugPrint(...)
+    if CONFIG.DebugMode then
+        print("[AutoFarm]", ...)
+    end
+end
+
+-- Function to find the nearest target (plant or sell area)
+local function findNearestTarget(targetNames, maxDistance)
+    local nearestTarget = nil
+    local minDistance = maxDistance
+
+    if not HumanoidRootPart then
+        debugPrint("HumanoidRootPart not found, cannot find target.")
+        return nil
+    end
+
+    for _, targetName in ipairs(targetNames) do
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if obj:IsA("BasePart") or obj:IsA("Model") then
+                -- Check if the object's name matches any of the target names
+                local isTarget = false
+                for _, name in ipairs(targetNames) do
+                    if obj.Name:lower():find(name:lower()) then
+                        isTarget = true
+                        break
+                    end
+                end
+
+                if isTarget then
+                    local targetPosition = obj.Position or (obj:IsA("Model") and obj.PrimaryPart and obj.PrimaryPart.Position)
+                    if targetPosition then
+                        local distance = (HumanoidRootPart.Position - targetPosition).Magnitude
+                        if distance < minDistance then
+                            minDistance = distance
+                            nearestTarget = obj
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return nearestTarget
+end
+
+-- Function to move the character to a position
+local function moveTo(position)
+    if CONFIG.AutoMove and Humanoid and HumanoidRootPart then
+        debugPrint("Moving to:", position)
+        Humanoid:MoveTo(position)
+        Humanoid.MoveToFinished:Wait()
+        debugPrint("Reached destination.")
+    end
+end
+
+-- Function to interact with a plant (harvest)
+local function interactWithPlant(plant)
+    if not plant or not HumanoidRootPart then return end
+
+    debugPrint("Attempting to harvest:", plant.Name)
+
+    -- Option 1: Fire a RemoteEvent (most common for modern games)
+    if CONFIG.HarvestRemoteEventName then
+        local remote = ReplicatedStorage:FindFirstChild(CONFIG.HarvestRemoteEventName)
+        if remote and remote:IsA("RemoteEvent") then
+            debugPrint("Firing Harvest RemoteEvent:", CONFIG.HarvestRemoteEventName, "for", plant.Name)
+            remote:FireServer(plant) -- Pass the plant object if required by the game
+        else
+            warn("Harvest RemoteEvent not found:", CONFIG.HarvestRemoteEventName)
+        end
+    else
+        -- Option 2: Simulate touch/click (older/simpler games)
+        -- Move close to the plant
+        if CONFIG.AutoMove then
+            moveTo(plant.Position)
+        end
+        -- You might need to simulate a click if the game uses ClickDetectors
+        -- For example: plant.ClickDetector:FireServer() -- (This is often not directly accessible client-side)
+        -- Or just touching it is enough for some games.
+        debugPrint("Simulating touch/proximity interaction with", plant.Name)
+    end
+    harvestedPlantsCount = harvestedPlantsCount + 1
+    debugPrint("Harvested plants count:", harvestedPlantsCount)
+    task.wait(CONFIG.HarvestDelay)
+end
+
+-- Function to interact with a sell area (sell items)
+local function interactWithSellArea(sellArea)
+    if not sellArea or not HumanoidRootPart then return end
+
+    debugPrint("Attempting to sell at:", sellArea.Name)
+
+    -- Option 1: Fire a RemoteEvent
+    if CONFIG.SellRemoteEventName then
+        local remote = ReplicatedStorage:FindFirstChild(CONFIG.SellRemoteEventName)
+        if remote and remote:IsA("RemoteEvent") then
+            debugPrint("Firing Sell RemoteEvent:", CONFIG.SellRemoteEventName, "at", sellArea.Name)
+            remote:FireServer() -- Or pass items if required by the game (e.g., remote:FireServer(inventoryItems))
+        else
+            warn("Sell RemoteEvent not found:", CONFIG.SellRemoteEventName)
+        end
+    else
+        -- Option 2: Simulate touch/proximity
+        if CONFIG.AutoMove then
+            moveTo(sellArea.Position)
+        end
+        debugPrint("Simulating touch/proximity interaction with", sellArea.Name)
+    end
+    harvestedPlantsCount = 0 -- Reset count after selling
+    debugPrint("Items sold. Resetting harvested count.")
+    task.wait(CONFIG.SellDelay)
+end
+
+-- Main Automation Loop
+local function startAutomation()
+    if isRunning then
+        debugPrint("Automation is already running.")
+        return
+    end
+    isRunning = true
+    debugPrint("Starting auto-harvest and auto-sell.")
+
+    while isRunning do
+        -- Check if we need to sell
+        if harvestedPlantsCount >= CONFIG.MinPlantsToSell then
+            debugPrint("Harvested enough plants, looking for sell area...")
+            local sellArea = findNearestTarget(CONFIG.SellAreaNames, CONFIG.MaxSearchDistance)
+            if sellArea then
+                interactWithSellArea(sellArea)
+            else
+                debugPrint("No sell area found within range. Continuing to harvest.")
+                task.wait(1) -- Wait a bit before retrying to find a sell area
+            end
+        else
+            -- Look for plants to harvest
+            debugPrint("Looking for plants to harvest...")
+            local plant = findNearestTarget(CONFIG.PlantNames, CONFIG.MaxSearchDistance)
+            if plant then
+                interactWithPlant(plant)
+            else
+                debugPrint("No plants found within range. Waiting...")
+                task.wait(2) -- Wait longer if no plants are found
+            end
+        end
+        RunService.Heartbeat:Wait() -- Yield to prevent script from crashing
+    end
+    debugPrint("Auto-harvest and auto-sell stopped.")
+end
+
+-- Function to stop automation
+local function stopAutomation()
+    isRunning = false
+    debugPrint("Stopping auto-harvest and auto-sell.")
+end
+
+-- UI for controlling the script (Optional, but good for user control)
+local function createControlUI()
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "AutoFarmControlUI"
+    ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+    ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+    local MainFrame = Instance.new("Frame")
+    MainFrame.Name = "ControlFrame"
+    MainFrame.Parent = ScreenGui
+    MainFrame.BackgroundColor3 = Color3.fromRGB(15, 23, 42)
+    MainFrame.BorderSizePixel = 0
+    MainFrame.Position = UDim2.new(0.05, 0, 0.05, 0) -- Top-left corner
+    MainFrame.Size = UDim2.new(0, 200, 0, 100)
+    MainFrame.Draggable = true -- Make it draggable
+
+    local Title = Instance.new("TextLabel")
+    Title.Name = "Title"
+    Title.Parent = MainFrame
+    Title.BackgroundColor3 = Color3.fromRGB(30, 41, 59)
+    Title.BorderSizePixel = 0
+    Title.Size = UDim2.new(1, 0, 0, 30)
+    Title.Font = Enum.Font.GothamSemibold
+    Title.Text = "Auto Farm Control"
+    Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+    Title.TextSize = 16.000
+
+    local StartButton = Instance.new("TextButton")
+    StartButton.Name = "StartButton"
+    StartButton.Parent = MainFrame
+    StartButton.BackgroundColor3 = Color3.fromRGB(34, 197, 94) -- Green
+    StartButton.BorderSizePixel = 0
+    StartButton.Position = UDim2.new(0.5, -80, 0.4, 0)
+    StartButton.Size = UDim2.new(0, 70, 0, 40)
+    StartButton.Font = Enum.Font.GothamSemibold
+    StartButton.Text = "Start"
+    StartButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    StartButton.TextSize = 14.000
+
+    local StopButton = Instance.new("TextButton")
+    StopButton.Name = "StopButton"
+    StopButton.Parent = MainFrame
+    StopButton.BackgroundColor3 = Color3.fromRGB(239, 68, 68) -- Red
+    StopButton.BorderSizePixel = 0
+    StopButton.Position = UDim2.new(0.5, 10, 0.4, 0)
+    StopButton.Size = UDim2.new(0, 70, 0, 40)
+    StopButton.Font = Enum.Font.GothamSemibold
+    StopButton.Text = "Stop"
+    StopButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    StopButton.TextSize = 14.000
+
+    StartButton.MouseButton1Click:Connect(startAutomation)
+    StopButton.MouseButton1Click:Connect(stopAutomation)
+
+    debugPrint("Control UI created.")
+end
+
+-- Initialize the script
+createControlUI() -- Create the UI to start/stop the script manually
+-- startAutomation() -- Uncomment this line if you want it to start immediately without clicking the UI button
