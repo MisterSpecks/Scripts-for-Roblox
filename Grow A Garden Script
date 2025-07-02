@@ -1,361 +1,461 @@
 --[[
-    Roblox Auto Plant Harvester and Seller Script for "Grow A Garden"
+    Roblox Blackhub Style UI (Movable)
 
-    This script automates the process of harvesting plants and selling them
-    in the Roblox game "Grow A Garden". It is designed to be run with a
-    Roblox exploit/executor.
+    This script creates a UI inspired by the "Blackhub" design, featuring:
+    - A main draggable window with rounded corners.
+    - A title bar with window controls (placeholders).
+    - A left-hand navigation sidebar.
+    - A main content area with example sections (Change Log, Planting).
 
-    IMPORTANT: You MAY need to further customize the CONFIG section below to
-    match the specific names of sell areas or RemoteEvents in the game,
-    as these can change or vary.
-
-    How to find exact names/RemoteEvents:
-    1. Use your exploit's "Explorer" feature to look for parts/models
-       representing plants and sell areas. Note their exact names.
-    2. Use your exploit's "Network" tab or "Decompiler" to find RemoteEvents
-       that are fired when you manually harvest a plant or sell items.
-
-    Disclaimer: Use this script at your own risk. Automated actions may violate
-    a game's terms of service and could lead to a ban.
+    This script is intended to be run via a Roblox exploit/executor.
 ]]
-
--- Configuration Section - Customize these values for your specific game!
-local CONFIG = {
-    -- Names of parts/models that represent plants in the workspace
-    -- This list includes many common plants from "Grow A Garden".
-    PlantNames = {
-        "Tomato", "Corn", "Strawberry", "Blueberry", "Carrot", "Pumpkin",
-        "Watermelon", "Apple", "Bamboo", "Coconut", "Cactus", "Dragon Fruit",
-        "Mango", "Grape", "Mushroom", "Pepper", "Cacao", "Beanstalk", "Peach",
-        "Moonglow", "Blood Banana", "Moon Melon", "Celestiberry", "Moonflower",
-        "Starfruit", "Mint", "Nightshade", "Glowshroom", "Moon Mango",
-        "Moon Blossom", "Candy Blossom", "Sugar Apple", "Dragon Pepper",
-        "Elephant Ears", "Hive Fruit", "Lily of the Valley", "Lilac",
-        "Rosy Delight", "Nectarine", "Guanabana", "Parasol Flower",
-        "Nectar Thorn", "Sunflower", "Bendboo", "Cocovine", "Honeysuckle",
-        "Venus Fly Trap", "Lumira", "Purple Dahlia", "Ember Lily", "Pink Lily",
-        "Suncoil", "Aloe Vera", "Bell Pepper", "Kiwi", "Pineapple", "Banana",
-        "Avocado", "Green Apple", "Cauliflower", "Feijoa", "Loquat",
-        "Prickly Pear", "Cantaloupe", "Wild Carrot", "Pitcher Plant",
-        "Traveler's Fruit", "Rafflesia", "Peace Lily", "Delphinium",
-        "Chocolate Carrot", "Red Lollipop", "Easter Egg", "Durian",
-        "Cranberry", "Eggplant", "Lotus", "Soul Fruit", "Cursed Fruit",
-        "Lavender", "Foxglove", "Manuka Flower", "Bee Balm", "Dandelion",
-        "Crocus", "Succulent", "Violet Corn"
-    },
-    -- Names of parts/models that represent sell areas/NPCs in the workspace.
-    -- You WILL likely need to find the exact name in-game (e.g., "ShopNPC", "FruitSeller", "SellStation").
-    SellAreaNames = {
-        "SellArea", "Shop", "Vendor", "SellingPoint", "NPC", "Trader", "Market"
-    },
-    -- Maximum distance to search for plants/sell areas
-    MaxSearchDistance = 100, -- Studs
-
-    -- Delay between harvesting actions (to avoid anti-cheat)
-    HarvestDelay = 0.5, -- seconds
-
-    -- Delay after selling before looking for more plants
-    SellDelay = 1.0, -- seconds
-
-    -- Minimum number of plants to harvest before attempting to sell
-    -- Set to 1 if you want to sell after every plant.
-    MinPlantsToSell = 5,
-
-    -- Enable/Disable automatic character movement to plants/sell areas
-    AutoMove = true,
-
-    -- Enable/Disable printing debug messages to the console
-    DebugMode = true,
-
-    -- If the game uses specific RemoteEvents for harvesting/selling, define them here.
-    -- You will need to find the actual names of these RemoteEvents using a decompiler
-    -- or network sniffer in your executor.
-    -- Example: game.ReplicatedStorage.RemoteEventForHarvest:FireServer(plant)
-    -- If the game uses touch/click, leave these as nil or empty.
-    HarvestRemoteEventName = nil, -- e.g., "HarvestPlantEvent"
-    SellRemoteEventName = nil,    -- e.g., "SellItemsEvent"
-}
 
 -- Services
 local Players = game:GetService("Players")
-local Workspace = game:GetService("Workspace")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService") -- Added for custom dragging
 
--- Player and Character
+-- Player
 local LocalPlayer = Players.LocalPlayer
-local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-local Humanoid = Character:WaitForChild("Humanoid")
-local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
-
--- State variables
-local isRunning = false
-local harvestedPlantsCount = 0
 
 -- UI Dragging Variables
 local dragging = false
-local dragStart = Vector2.new(0, 0)
-local initialPosition = UDim2.new(0, 0, 0, 0)
+local dragStartOffset = Vector2.new(0, 0) -- Offset from mouse to frame's top-left corner
+local dragConnection = nil -- Stores the Heartbeat connection for the dragging loop
 
--- Utility Functions
-
--- Function to print debug messages
-local function debugPrint(...)
-    if CONFIG.DebugMode then
-        print("[AutoFarm]", ...)
-    end
-end
-
--- Function to find the nearest target (plant or sell area)
-local function findNearestTarget(targetNames, maxDistance)
-    local nearestTarget = nil
-    local minDistance = maxDistance
-
-    if not HumanoidRootPart then
-        debugPrint("HumanoidRootPart not found, cannot find target.")
-        return nil
-    end
-
-    local playerPosition = HumanoidRootPart.Position
-
-    -- Iterate through all descendants in Workspace
-    for _, obj in ipairs(Workspace:GetDescendants()) do
-        if obj:IsA("BasePart") or obj:IsA("Model") or obj:IsA("MeshPart") or obj:IsA("Part") then
-            local isTarget = false
-            for _, name in ipairs(targetNames) do
-                if obj.Name:lower():find(name:lower()) then
-                    isTarget = true
-                    break
-                end
-            end
-
-            if isTarget and obj.Parent ~= LocalPlayer and obj.Parent ~= Character then -- Avoid targeting self
-                local targetPosition = obj.Position
-                if obj:IsA("Model") and obj.PrimaryPart then
-                    targetPosition = obj.PrimaryPart.Position
-                end
-
-                if targetPosition then
-                    local distance = (playerPosition - targetPosition).Magnitude
-                    if distance < minDistance then
-                        minDistance = distance
-                        nearestTarget = obj
-                    end
-                end
-            end
-        end
-    end
-    return nearestTarget
-end
-
--- Function to move the character to a position
-local function moveTo(position)
-    if CONFIG.AutoMove and Humanoid and HumanoidRootPart then
-        debugPrint("Moving to:", position)
-        Humanoid:MoveTo(position)
-        -- Wait for the character to reach the destination or timeout
-        local timeout = 5 -- seconds
-        local start = tick()
-        repeat
-            task.wait(0.1)
-            if (HumanoidRootPart.Position - position).Magnitude < 5 then -- Close enough
-                break
-            end
-        until tick() - start > timeout or not isRunning -- Stop if script is stopped
-        Humanoid:MoveTo(HumanoidRootPart.Position) -- Stop current movement
-        debugPrint("Reached destination or timed out.")
-    end
-end
-
--- Function to interact with a plant (harvest)
-local function interactWithPlant(plant)
-    if not plant or not HumanoidRootPart or not isRunning then return end
-
-    debugPrint("Attempting to harvest:", plant.Name)
-
-    -- Move close to the plant if AutoMove is enabled
-    if CONFIG.AutoMove then
-        moveTo(plant.Position)
-    end
-
-    -- Option 1: Fire a RemoteEvent (most common for modern games)
-    if CONFIG.HarvestRemoteEventName then
-        local remote = ReplicatedStorage:FindFirstChild(CONFIG.HarvestRemoteEventName)
-        if remote and remote:IsA("RemoteEvent") then
-            debugPrint("Firing Harvest RemoteEvent:", CONFIG.HarvestRemoteEventName, "for", plant.Name)
-            -- Games might expect the plant instance, its name, or a specific argument
-            remote:FireServer(plant)
-        else
-            warn("Harvest RemoteEvent not found:", CONFIG.HarvestRemoteEventName)
-            debugPrint("Attempting generic interaction (touch/click).")
-        end
-    else
-        -- Option 2: Simulate touch/click (older/simpler games or if RemoteEvent is unknown)
-        debugPrint("Simulating proximity/touch interaction with", plant.Name)
-    end
-    harvestedPlantsCount = harvestedPlantsCount + 1
-    debugPrint("Harvested plants count:", harvestedPlantsCount)
-    task.wait(CONFIG.HarvestDelay)
-end
-
--- Function to interact with a sell area (sell items)
-local function interactWithSellArea(sellArea)
-    if not sellArea or not HumanoidRootPart or not isRunning then return end
-
-    debugPrint("Attempting to sell at:", sellArea.Name)
-
-    -- Move close to the sell area if AutoMove is enabled
-    if CONFIG.AutoMove then
-        moveTo(sellArea.Position)
-    end
-
-    -- Option 1: Fire a RemoteEvent
-    if CONFIG.SellRemoteEventName then
-        local remote = ReplicatedStorage:FindFirstChild(CONFIG.SellRemoteEventName)
-        if remote and remote:IsA("RemoteEvent") then
-            debugPrint("Firing Sell RemoteEvent:", CONFIG.SellRemoteEventName, "at", sellArea.Name)
-            remote:FireServer() -- Or pass items/inventory if required by the game
-        else
-            warn("Sell RemoteEvent not found:", CONFIG.SellRemoteEventName)
-            debugPrint("Attempting generic interaction (touch/proximity).")
-        end
-    else
-        -- Option 2: Simulate touch/proximity
-        debugPrint("Simulating proximity/touch interaction with", sellArea.Name)
-    end
-    harvestedPlantsCount = 0 -- Reset count after selling
-    debugPrint("Items sold. Resetting harvested count.")
-    task.wait(CONFIG.SellDelay)
-end
-
--- Main Automation Loop
-local function startAutomation()
-    if isRunning then
-        debugPrint("Automation is already running.")
-        return
-    end
-    isRunning = true
-    debugPrint("Starting auto-harvest and auto-sell.")
-
-    -- Ensure character is ready before starting loop
-    Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-    Humanoid = Character:WaitForChild("Humanoid")
-    HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
-
-    while isRunning do
-        -- Check if we need to sell
-        if harvestedPlantsCount >= CONFIG.MinPlantsToSell then
-            debugPrint("Harvested enough plants, looking for sell area...")
-            local sellArea = findNearestTarget(CONFIG.SellAreaNames, CONFIG.MaxSearchDistance)
-            if sellArea then
-                interactWithSellArea(sellArea)
-            else
-                debugPrint("No sell area found within range. Continuing to harvest.")
-                task.wait(1) -- Wait a bit before retrying to find a sell area
-            end
-        else
-            -- Look for plants to harvest
-            debugPrint("Looking for plants to harvest...")
-            local plant = findNearestTarget(CONFIG.PlantNames, CONFIG.MaxSearchDistance)
-            if plant then
-                interactWithPlant(plant)
-            else
-                debugPrint("No plants found within range. Waiting...")
-                task.wait(2) -- Wait longer if no plants are found
-            end
-        end
-        RunService.Heartbeat:Wait() -- Yield to prevent script from crashing
-    end
-    debugPrint("Auto-harvest and auto-sell stopped.")
-end
-
--- Function to stop automation
-local function stopAutomation()
-    isRunning = false
-    debugPrint("Stopping auto-harvest and auto-sell.")
-end
-
--- UI for controlling the script
-local function createControlUI()
+-- UI Creation Function
+local function createBlackhubUI()
     local ScreenGui = Instance.new("ScreenGui")
-    ScreenGui.Name = "AutoFarmControlUI"
+    ScreenGui.Name = "BlackhubStyleUI"
     ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
     ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    ScreenGui.ResetOnSpawn = false -- Keep UI after character respawns
 
+    -- Main Frame (the entire window)
     local MainFrame = Instance.new("Frame")
-    MainFrame.Name = "ControlFrame"
+    MainFrame.Name = "MainFrame"
     MainFrame.Parent = ScreenGui
-    MainFrame.BackgroundColor3 = Color3.fromRGB(15, 23, 42)
+    MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30) -- Dark background
     MainFrame.BorderSizePixel = 0
-    MainFrame.Position = UDim2.new(0.05, 0, 0.05, 0) -- Top-left corner
-    MainFrame.Size = UDim2.new(0, 200, 0, 100)
-    -- MainFrame.Draggable = true -- Removed as we are implementing custom dragging
+    MainFrame.Position = UDim2.new(0.5, -350, 0.5, -250) -- Centered, larger size
+    MainFrame.Size = UDim2.new(0, 700, 0, 500)
+    MainFrame.Active = true -- Crucial for dragging
+    MainFrame.ZIndex = 10
 
-    local Title = Instance.new("TextLabel")
-    Title.Name = "Title"
-    Title.Parent = MainFrame
-    Title.BackgroundColor3 = Color3.fromRGB(30, 41, 59)
-    Title.BorderSizePixel = 0
-    Title.Size = UDim2.new(1, 0, 0, 30)
-    Title.Font = Enum.Font.GothamSemibold
-    Title.Text = "Grow A Garden Auto Farm"
-    Title.TextColor3 = Color3.fromRGB(255, 255, 255)
-    Title.TextSize = 16.000
+    -- Add UICorner for rounded edges to MainFrame
+    local UICornerMain = Instance.new("UICorner")
+    UICornerMain.Parent = MainFrame
+    UICornerMain.CornerRadius = UDim.new(0, 10)
 
-    local StartButton = Instance.new("TextButton")
-    StartButton.Name = "StartButton"
-    StartButton.Parent = MainFrame
-    StartButton.BackgroundColor3 = Color3.fromRGB(34, 197, 94) -- Green
-    StartButton.BorderSizePixel = 0
-    StartButton.Position = UDim2.new(0.5, -80, 0.4, 0)
-    StartButton.Size = UDim2.new(0, 70, 0, 40)
-    StartButton.Font = Enum.Font.GothamSemibold
-    StartButton.Text = "Start"
-    StartButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-    StartButton.TextSize = 14.000
+    -- Add UIStroke for a subtle border to MainFrame
+    local UIStrokeMain = Instance.new("UIStroke")
+    UIStrokeMain.Parent = MainFrame
+    UIStrokeMain.Color = Color3.fromRGB(50, 50, 50)
+    UIStrokeMain.Thickness = 2
+    UIStrokeMain.Transparency = 0.6
 
-    local StopButton = Instance.new("TextButton")
-    StopButton.Name = "StopButton"
-    StopButton.Parent = MainFrame
-    StopButton.BackgroundColor3 = Color3.fromRGB(239, 68, 68) -- Red
-    StopButton.BorderSizePixel = 0
-    StopButton.Position = UDim2.new(0.5, 10, 0.4, 0)
-    StopButton.Size = UDim2.new(0, 70, 0, 40)
-    StopButton.Font = Enum.Font.GothamSemibold
-    StopButton.Text = "Stop"
-    StopButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-    StopButton.TextSize = 14.000
+    -- Title Bar
+    local TitleBar = Instance.new("Frame")
+    TitleBar.Name = "TitleBar"
+    TitleBar.Parent = MainFrame
+    TitleBar.BackgroundColor3 = Color3.fromRGB(40, 40, 40) -- Slightly lighter than main frame
+    TitleBar.BorderSizePixel = 0
+    TitleBar.Size = UDim2.new(1, 0, 0, 40) -- Full width, 40px height
+    TitleBar.Position = UDim2.new(0, 0, 0, 0)
+    TitleBar.Active = true -- Make title bar draggable
 
-    StartButton.MouseButton1Click:Connect(startAutomation)
-    StopButton.MouseButton1Click:Connect(stopAutomation)
+    -- Title Text Label
+    local TitleLabel = Instance.new("TextLabel")
+    TitleLabel.Name = "TitleLabel"
+    TitleLabel.Parent = TitleBar
+    TitleLabel.BackgroundTransparency = 1
+    TitleLabel.Size = UDim2.new(1, -120, 1, 0) -- Leave space for window controls
+    TitleLabel.Position = UDim2.new(0, 0, 0, 0)
+    TitleLabel.Font = Enum.Font.GothamSemibold
+    TitleLabel.Text = "GAG | Blackhub"
+    TitleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    TitleLabel.TextSize = 18
+    TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    TitleLabel.TextYAlignment = Enum.TextYAlignment.Center
+    TitleLabel.TextWrapped = true
+    TitleLabel.TextScaled = false
+    TitleLabel.Active = true -- Make title label draggable
+    TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    TitleLabel.TextOffset = Vector2.new(10, 0) -- Padding
 
-    -- Custom Dragging Logic
-    MainFrame.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = true
-            dragStart = input.Position
-            initialPosition = MainFrame.Position
-        end
-    end)
+    -- Window Control Buttons (Placeholders)
+    local ButtonContainer = Instance.new("Frame")
+    ButtonContainer.Name = "ButtonContainer"
+    ButtonContainer.Parent = TitleBar
+    ButtonContainer.BackgroundTransparency = 1
+    ButtonContainer.Size = UDim2.new(0, 120, 1, 0)
+    ButtonContainer.Position = UDim2.new(1, -120, 0, 0)
+    
+    local UIListLayoutButtons = Instance.new("UIListLayout")
+    UIListLayoutButtons.Parent = ButtonContainer
+    UIListLayoutButtons.FillDirection = Enum.FillDirection.Horizontal
+    UIListLayoutButtons.HorizontalAlignment = Enum.HorizontalAlignment.Right
+    UIListLayoutButtons.VerticalAlignment = Enum.VerticalAlignment.Center
+    UIListLayoutButtons.Padding = UDim.new(0, 5)
 
-    MainFrame.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = false
-        end
-    end)
+    local function createWindowControlButton(name, text, color)
+        local button = Instance.new("TextButton")
+        button.Name = name
+        button.Parent = ButtonContainer
+        button.BackgroundColor3 = color
+        button.BorderSizePixel = 0
+        button.Size = UDim2.new(0, 30, 0, 30)
+        button.Font = Enum.Font.GothamBold
+        button.Text = text
+        button.TextColor3 = Color3.fromRGB(255, 255, 255)
+        button.TextSize = 18
+        
+        local UICornerButton = Instance.new("UICorner")
+        UICornerButton.Parent = button
+        UICornerButton.CornerRadius = UDim.new(0, 5)
+        return button
+    end
 
-    UserInputService.InputChanged:Connect(function(input, gameProcessedEvent)
-        if input.UserInputType == Enum.UserInputType.MouseMovement and dragging and not gameProcessedEvent then
-            local delta = input.Position - dragStart
-            local newX = initialPosition.X.Offset + delta.X
-            local newY = initialPosition.Y.Offset + delta.Y
-            MainFrame.Position = UDim2.new(initialPosition.X.Scale, newX, initialPosition.Y.Scale, newY)
-        end
-    end)
+    local MinimizeButton = createWindowControlButton("MinimizeButton", "-", Color3.fromRGB(70, 70, 70))
+    local MaximizeButton = createWindowControlButton("MaximizeButton", "□", Color3.fromRGB(70, 70, 70))
+    local CloseButton = createWindowControlButton("CloseButton", "X", Color3.fromRGB(200, 50, 50))
+    CloseButton.MouseButton1Click:Connect(function() ScreenGui:Destroy() end)
 
-    debugPrint("Control UI created with custom dragging.")
+    -- Main Content Area (holds sidebar and actual content)
+    local MainContentArea = Instance.new("Frame")
+    MainContentArea.Name = "MainContentArea"
+    MainContentArea.Parent = MainFrame
+    MainContentArea.BackgroundColor3 = Color3.fromRGB(30, 30, 30) -- Same as MainFrame
+    MainContentArea.BorderSizePixel = 0
+    MainContentArea.Position = UDim2.new(0, 0, 0, 40) -- Below title bar
+    MainContentArea.Size = UDim2.new(1, 0, 1, -40) -- Fills remaining space
+
+    local UIListLayoutMainContent = Instance.new("UIListLayout")
+    UIListLayoutMainContent.Parent = MainContentArea
+    UIListLayoutMainContent.FillDirection = Enum.FillDirection.Horizontal
+    UIListLayoutMainContent.Padding = UDim.new(0, 0)
+    UIListLayoutMainContent.HorizontalAlignment = Enum.HorizontalAlignment.Left
+    UIListLayoutMainContent.VerticalAlignment = Enum.VerticalAlignment.Top
+
+    -- Sidebar Frame
+    local SidebarFrame = Instance.new("Frame")
+    SidebarFrame.Name = "SidebarFrame"
+    SidebarFrame.Parent = MainContentArea
+    SidebarFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 40) -- Darker than content area
+    SidebarFrame.BorderSizePixel = 0
+    SidebarFrame.Size = UDim2.new(0, 150, 1, 0) -- Fixed width sidebar
+    
+    local UIListLayoutSidebar = Instance.new("UIListLayout")
+    UIListLayoutSidebar.Parent = SidebarFrame
+    UIListLayoutSidebar.FillDirection = Enum.FillDirection.Vertical
+    UIListLayoutSidebar.HorizontalAlignment = Enum.HorizontalAlignment.Left
+    UIListLayoutSidebar.VerticalAlignment = Enum.VerticalAlignment.Top
+    UIListLayoutSidebar.Padding = UDim.new(0, 5)
+    UIListLayoutSidebar.SortOrder = Enum.SortOrder.LayoutOrder
+
+    -- Sidebar Navigation Buttons
+    local navItems = {
+        {"Main", "Main", 1},
+        {"Teleports", "Teleports", 2},
+        {"Misc", "Misc", 3},
+        {"Player", "Player", 4},
+        {"Pets", "Pets", 5},
+        {"Webhook", "Webhook", 6},
+        {"Settings", "Settings", 7}
+    }
+
+    local function createNavButton(name, text, layoutOrder)
+        local button = Instance.new("TextButton")
+        button.Name = name .. "NavButton"
+        button.Parent = SidebarFrame
+        button.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+        button.BorderSizePixel = 0
+        button.Size = UDim2.new(1, 0, 0, 40)
+        button.Font = Enum.Font.GothamSemibold
+        button.Text = text
+        button.TextColor3 = Color3.fromRGB(200, 200, 200)
+        button.TextSize = 16
+        button.TextXAlignment = Enum.TextXAlignment.Left
+        button.TextOffset = Vector2.new(10, 0)
+        button.LayoutOrder = layoutOrder
+
+        local UICornerButton = Instance.new("UICorner")
+        UICornerButton.Parent = button
+        UICornerButton.CornerRadius = UDim.new(0, 5)
+
+        -- Hover effect
+        button.MouseEnter:Connect(function()
+            button.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        end)
+        button.MouseLeave:Connect(function()
+            button.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+        end)
+
+        return button
+    end
+
+    for _, item in ipairs(navItems) do
+        createNavButton(item[1], item[2], item[3])
+    end
+
+    -- Content Frame (where the actual content changes)
+    local ContentFrame = Instance.new("Frame")
+    ContentFrame.Name = "ContentFrame"
+    ContentFrame.Parent = MainContentArea
+    ContentFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35) -- Slightly different from sidebar
+    ContentFrame.BorderSizePixel = 0
+    ContentFrame.Size = UDim2.new(1, -150, 1, 0) -- Fills remaining space
+    
+    local UIListLayoutContent = Instance.new("UIListLayout")
+    UIListLayoutContent.Parent = ContentFrame
+    UIListLayoutContent.FillDirection = Enum.FillDirection.Vertical
+    UIListLayoutContent.HorizontalAlignment = Enum.HorizontalAlignment.Left
+    UIListLayoutContent.VerticalAlignment = Enum.VerticalAlignment.Top
+    UIListLayoutContent.Padding = UDim.new(0, 10)
+    UIListLayoutContent.SortOrder = Enum.SortOrder.LayoutOrder
+
+    local UIPaddingContent = Instance.new("UIPadding")
+    UIPaddingContent.Parent = ContentFrame
+    UIPaddingContent.PaddingLeft = UDim.new(0, 10)
+    UIPaddingContent.PaddingRight = UDim.new(0, 10)
+    UIPaddingContent.PaddingTop = UDim.new(0, 10)
+    UIPaddingContent.PaddingBottom = UDim.new(0, 10)
+
+    -- Main Section Content (Example - as seen in image)
+    local MainSection = Instance.new("Frame")
+    MainSection.Name = "MainSection"
+    MainSection.Parent = ContentFrame
+    MainSection.BackgroundTransparency = 1
+    MainSection.Size = UDim2.new(1, 0, 0, 400) -- Example size, adjust as needed
+    MainSection.AutomaticSize = Enum.AutomaticSize.Y -- Allow content to dictate height
+    MainSection.LayoutOrder = 1
+
+    local UIListLayoutMainSection = Instance.new("UIListLayout")
+    UIListLayoutMainSection.Parent = MainSection
+    UIListLayoutMainSection.FillDirection = Enum.FillDirection.Vertical
+    UIListLayoutMainSection.HorizontalAlignment = Enum.HorizontalAlignment.Left
+    UIListLayoutMainSection.VerticalAlignment = Enum.VerticalAlignment.Top
+    UIListLayoutMainSection.Padding = UDim.new(0, 10)
+
+    -- Section Header "Main"
+    local SectionHeaderMain = Instance.new("TextLabel")
+    SectionHeaderMain.Name = "SectionHeader"
+    SectionHeaderMain.Parent = MainSection
+    SectionHeaderMain.BackgroundTransparency = 1
+    SectionHeaderMain.Size = UDim2.new(1, 0, 0, 25)
+    SectionHeaderMain.Font = Enum.Font.GothamBold
+    SectionHeaderMain.Text = "Main"
+    SectionHeaderMain.TextColor3 = Color3.fromRGB(255, 255, 255)
+    SectionHeaderMain.TextSize = 22
+    SectionHeaderMain.TextXAlignment = Enum.TextXAlignment.Left
+    SectionHeaderMain.LayoutOrder = 1
+
+    -- Change Log Section
+    local ChangeLogFrame = Instance.new("Frame")
+    ChangeLogFrame.Name = "ChangeLogFrame"
+    ChangeLogFrame.Parent = MainSection
+    ChangeLogFrame.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+    ChangeLogFrame.BorderSizePixel = 0
+    ChangeLogFrame.Size = UDim2.new(1, 0, 0, 150) -- Example size
+    ChangeLogFrame.AutomaticSize = Enum.AutomaticSize.Y
+    ChangeLogFrame.LayoutOrder = 2
+
+    local UICornerChangeLog = Instance.new("UICorner")
+    UICornerChangeLog.Parent = ChangeLogFrame
+    UICornerChangeLog.CornerRadius = UDim.new(0, 8)
+
+    local UIListLayoutChangeLog = Instance.new("UIListLayout")
+    UIListLayoutChangeLog.Parent = ChangeLogFrame
+    UIListLayoutChangeLog.FillDirection = Enum.FillDirection.Vertical
+    UIListLayoutChangeLog.HorizontalAlignment = Enum.HorizontalAlignment.Left
+    UIListLayoutChangeLog.VerticalAlignment = Enum.VerticalAlignment.Top
+    UIListLayoutChangeLog.Padding = UDim.new(0, 5)
+
+    local UIPaddingChangeLog = Instance.new("UIPadding")
+    UIPaddingChangeLog.Parent = ChangeLogFrame
+    UIPaddingChangeLog.PaddingLeft = UDim.new(0, 10)
+    UIPaddingChangeLog.PaddingRight = UDim.new(0, 10)
+    UIPaddingChangeLog.PaddingTop = UDim.new(0, 10)
+    UIPaddingChangeLog.PaddingBottom = UDim.new(0, 10)
+
+    local ChangeLogTitle = Instance.new("TextLabel")
+    ChangeLogTitle.Name = "ChangeLogTitle"
+    ChangeLogTitle.Parent = ChangeLogFrame
+    ChangeLogTitle.BackgroundTransparency = 1
+    ChangeLogTitle.Size = UDim2.new(1, 0, 0, 20)
+    ChangeLogTitle.Font = Enum.Font.GothamSemibold
+    ChangeLogTitle.Text = "Change Log:"
+    ChangeLogTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+    ChangeLogTitle.TextSize = 16
+    ChangeLogTitle.TextXAlignment = Enum.TextXAlignment.Left
+
+    local DiscordLink = Instance.new("TextButton")
+    DiscordLink.Name = "DiscordLink"
+    DiscordLink.Parent = ChangeLogFrame
+    DiscordLink.BackgroundTransparency = 1
+    DiscordLink.Size = UDim2.new(1, 0, 0, 20)
+    DiscordLink.Font = Enum.Font.Gotham
+    DiscordLink.Text = "Copy Discord Invite: https://discord.gg/92BUwMZHet"
+    DiscordLink.TextColor3 = Color3.fromRGB(100, 150, 255) -- Blue for link
+    DiscordLink.TextSize = 14
+    DiscordLink.TextXAlignment = Enum.TextXAlignment.Left
+    DiscordLink.TextWrapped = true
+    DiscordLink.MouseButton1Click:Connect(function() setclipboard("https://discord.gg/92BUwMZHet") end)
+
+    local UpdateLog = Instance.new("TextLabel")
+    UpdateLog.Name = "UpdateLog"
+    UpdateLog.Parent = ChangeLogFrame
+    UpdateLog.BackgroundTransparency = 1
+    UpdateLog.Size = UDim2.new(1, 0, 0, 60) -- Adjust height as needed
+    UpdateLog.Font = Enum.Font.Gotham
+    UpdateLog.Text = "Update Log:\nAdded summer plants to destroy tab\nFixed Auto Favourite not working\nImproved Auto Harvest"
+    UpdateLog.TextColor3 = Color3.fromRGB(200, 200, 200)
+    UpdateLog.TextSize = 14
+    UpdateLog.TextXAlignment = Enum.TextXAlignment.Left
+    UpdateLog.TextWrapped = true
+
+    -- Current Server Version
+    local VersionLabel = Instance.new("TextLabel")
+    VersionLabel.Name = "VersionLabel"
+    VersionLabel.Parent = MainSection
+    VersionLabel.BackgroundTransparency = 1
+    VersionLabel.Size = UDim2.new(1, 0, 0, 20)
+    VersionLabel.Font = Enum.Font.Gotham
+    VersionLabel.Text = "Current Server Version: 141B"
+    VersionLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    VersionLabel.TextSize = 14
+    VersionLabel.TextXAlignment = Enum.TextXAlignment.Left
+    VersionLabel.LayoutOrder = 3
+
+    -- Planting Section
+    local PlantingFrame = Instance.new("Frame")
+    PlantingFrame.Name = "PlantingFrame"
+    PlantingFrame.Parent = MainSection
+    PlantingFrame.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+    PlantingFrame.BorderSizePixel = 0
+    PlantingFrame.Size = UDim2.new(1, 0, 0, 80) -- Example size
+    PlantingFrame.AutomaticSize = Enum.AutomaticSize.Y
+    PlantingFrame.LayoutOrder = 4
+
+    local UICornerPlanting = Instance.new("UICorner")
+    UICornerPlanting.Parent = PlantingFrame
+    UICornerPlanting.CornerRadius = UDim.new(0, 8)
+
+    local UIListLayoutPlanting = Instance.new("UIListLayout")
+    UIListLayoutPlanting.Parent = PlantingFrame
+    UIListLayoutPlanting.FillDirection = Enum.FillDirection.Vertical
+    UIListLayoutPlanting.HorizontalAlignment = Enum.HorizontalAlignment.Left
+    UIListLayoutPlanting.VerticalAlignment = Enum.VerticalAlignment.Top
+    UIListLayoutPlanting.Padding = UDim.new(0, 5)
+
+    local UIPaddingPlanting = Instance.new("UIPadding")
+    UIPaddingPlanting.Parent = PlantingFrame
+    UIPaddingPlanting.PaddingLeft = UDim.new(0, 10)
+    UIPaddingPlanting.PaddingRight = UDim.new(0, 10)
+    UIPaddingPlanting.PaddingTop = UDim.new(0, 10)
+    UIPaddingPlanting.PaddingBottom = UDim.new(0, 10)
+
+    local PlantingTitle = Instance.new("TextLabel")
+    PlantingTitle.Name = "PlantingTitle"
+    PlantingTitle.Parent = PlantingFrame
+    PlantingTitle.BackgroundTransparency = 1
+    PlantingTitle.Size = UDim2.new(1, 0, 0, 20)
+    PlantingTitle.Font = Enum.Font.GothamSemibold
+    PlantingTitle.Text = "Planting"
+    PlantingTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+    PlantingTitle.TextSize = 16
+    PlantingTitle.TextXAlignment = Enum.TextXAlignment.Left
+
+    local SelectSeedsLabel = Instance.new("TextLabel")
+    SelectSeedsLabel.Name = "SelectSeedsLabel"
+    SelectSeedsLabel.Parent = PlantingFrame
+    SelectSeedsLabel.BackgroundTransparency = 1
+    SelectSeedsLabel.Size = UDim2.new(0.5, 0, 0, 20)
+    SelectSeedsLabel.Font = Enum.Font.Gotham
+    SelectSeedsLabel.Text = "Select Seeds to plant"
+    SelectSeedsLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    SelectSeedsLabel.TextSize = 14
+    SelectSeedsLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+    local SeedDropdown = Instance.new("TextButton") -- Simple TextButton as a dropdown placeholder
+    SeedDropdown.Name = "SeedDropdown"
+    SeedDropdown.Parent = PlantingFrame
+    SeedDropdown.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+    SeedDropdown.BorderSizePixel = 0
+    SeedDropdown.Size = UDim2.new(0.4, 0, 0, 25) -- Smaller width
+    SeedDropdown.Position = UDim2.new(0.55, 0, 0, 0) -- Position next to label (requires UILayout to be set to horizontal for this row)
+    SeedDropdown.Font = Enum.Font.Gotham
+    SeedDropdown.Text = "All"
+    SeedDropdown.TextColor3 = Color3.fromRGB(255, 255, 255)
+    SeedDropdown.TextSize = 14
+    
+    local UICornerDropdown = Instance.new("UICorner")
+    UICornerDropdown.Parent = SeedDropdown
+    UICornerDropdown.CornerRadius = UDim.new(0, 5)
+
+    -- To align "Select Seeds to plant" and "All" horizontally,
+    -- you'd typically need a UIListLayout or UIGridLayout for that specific row.
+    -- For simplicity in this example, they are stacked vertically by default.
+    -- A more advanced dropdown would involve creating a separate frame with options.
+
+    return {
+        ScreenGui = ScreenGui,
+        MainFrame = MainFrame,
+        TitleBar = TitleBar, -- For dragging
+        TitleLabel = TitleLabel, -- For dragging
+        CloseButton = CloseButton,
+        SidebarFrame = SidebarFrame,
+        ContentFrame = ContentFrame,
+        MainSection = MainSection,
+        ChangeLogFrame = ChangeLogFrame,
+        PlantingFrame = PlantingFrame,
+        -- You would return other specific elements if you need to interact with them
+    }
 end
 
--- Initialize the script
-createControlUI()
+-- Initialize UI and connect events
+local function initBlackhubUI()
+    local ui = createBlackhubUI()
+    local MainFrame = ui.MainFrame
+    local TitleBar = ui.TitleBar -- Use TitleBar for dragging
+    
+    -- Custom Dragging Logic for MainFrame (using Heartbeat for continuous updates)
+    TitleBar.InputBegan:Connect(function(input) -- Connect InputBegan to TitleBar
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            -- Calculate the offset from the mouse position to the frame's top-left corner
+            dragStartOffset = input.Position - Vector2.new(MainFrame.Position.X.Offset, MainFrame.Position.Y.Offset)
+
+            -- Disconnect any existing connection to prevent multiple connections
+            if dragConnection then
+                dragConnection:Disconnect()
+            end
+
+            -- Connect to Heartbeat for continuous dragging updates
+            dragConnection = RunService.Heartbeat:Connect(function()
+                if dragging then -- Ensure dragging is still active inside the loop
+                    local currentMousePosition = UserInputService:GetMouseLocation()
+                    local newX = currentMousePosition.X - dragStartOffset.X
+                    local newY = currentMousePosition.Y - dragStartOffset.Y
+                    MainFrame.Position = UDim2.new(0, newX, 0, newY)
+                end
+            end)
+        end
+    end)
+
+    -- Connect InputEnded to UserInputService to catch mouse release anywhere on the screen
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = false
+            if dragConnection then
+                dragConnection:Disconnect() -- Disconnect Heartbeat when dragging stops
+                dragConnection = nil
+            end
+        end
+    end)
+    
+    return ui
+end
+
+-- Start the UI
+initBlackhubUI()
