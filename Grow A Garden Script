@@ -21,10 +21,8 @@ local CONFIG = {
         "Lavender", "Foxglove", "Manuka Flower", "Bee Balm", "Dandelion",
         "Crocus", "Succulent", "Violet Corn"
     },
-    -- Names of parts/models that represent sell areas/NPCs in the workspace.
-    -- You WILL likely need to find the exact name in-game (e.g., "ShopNPC", "FruitSeller", "SellStation").
     SellAreaNames = {
-        "SellArea", "Shop", "Vendor", "SellingPoint", "NPC", "Trader", "Market"
+        "SellArea", "Sell", "SellStuff", "SellingPoint", "NPC", "Trader", "Market"
     },
     -- Maximum distance to search for plants/sell areas
     MaxSearchDistance = 100, -- Studs
